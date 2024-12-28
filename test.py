@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 import time
+#prova
 
 def fetch_binance_data(symbol, interval, start_time, end_time=None, limit=1000):
     """

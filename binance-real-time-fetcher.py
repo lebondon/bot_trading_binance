@@ -10,20 +10,34 @@ import sys
 
 class BinanceRealtimeFetcher:
     def __init__(self):
-        # Use current directory
         self.save_dir = Path.cwd()
         self.last_save_time = time.time()
-        self.save_interval = 10
-        self.new_data_buffer = []
+        self.save_interval = 1
+        self.current_second_data = []
         self.buffer_lock = threading.Lock()
         self.ws = None
         self.is_connected = False
-        self.last_price = None
-        self.start_time = time.time()
         self.trade_count = 0
 
     def get_parquet_path(self, symbol, date):
-        return self.save_dir / f"{symbol}_{date.strftime('%Y%m%d')}.parquet"
+        return self.save_dir / f"{symbol}_{date.strftime('%Y%m%d')}_1s.parquet"
+
+    def aggregate_second_data(self, data_list):
+        """Aggregate trade data into 1-second intervals"""
+        if not data_list:
+            return None
+        
+        df = pd.DataFrame(data_list, columns=['timestamp', 'price', 'volume'])
+        # Round timestamp to seconds
+        df['timestamp'] = df['timestamp'].dt.floor('S')
+        
+        # Aggregate by second
+        agg_df = df.groupby('timestamp').agg({
+            'price': 'mean',      # Average price in the second
+            'volume': 'sum'       # Total volume in the second
+        }).reset_index()
+        
+        return agg_df
 
     def on_message(self, ws, message):
         try:
@@ -33,18 +47,17 @@ class BinanceRealtimeFetcher:
             price = float(data['p'])
             volume = float(data['q'])
             
-            # Add to buffer
             with self.buffer_lock:
-                self.new_data_buffer.append([timestamp, price, volume])
+                self.current_second_data.append([timestamp, price, volume])
             
-            # Update trade statistics
             self.trade_count += 1
+            current_time = datetime.now().strftime('%H:%M:%S')
             
-            # Print update (only price updates, no SMA or other calculations)
-            sys.stdout.write("\033[K")  # Clear line
-            print(f"\rPrice: ${price:,.2f} | Volume: {volume:.4f} | Total Trades: {self.trade_count:,}", end='')
+            # Print update
+            sys.stdout.write("\033[K")
+            print(f"\r[{current_time}] Price: ${price:,.2f} | Volume: {volume:.4f} | Total Trades: {self.trade_count:,}", end='')
             
-            # Save data if interval elapsed
+            # Check if we should save
             current_time = time.time()
             if current_time - self.last_save_time >= self.save_interval:
                 self.save_to_parquet()
@@ -54,27 +67,33 @@ class BinanceRealtimeFetcher:
             print(f"\nError processing message: {e}")
 
     def save_to_parquet(self):
-        if not self.new_data_buffer:
-            return
-
         with self.buffer_lock:
-            buffer_data = self.new_data_buffer.copy()
-            self.new_data_buffer = []
+            current_data = self.current_second_data.copy()
+            self.current_second_data = []
 
-        if buffer_data:
-            new_df = pd.DataFrame(buffer_data, columns=['timestamp', 'price', 'volume'])
-            today = datetime.now().date()
-            parquet_path = self.get_parquet_path(self.symbol, today)
-
+        if current_data:
             try:
+                # Aggregate the current second's data
+                agg_df = self.aggregate_second_data(current_data)
+                if agg_df is None or agg_df.empty:
+                    return
+
+                today = datetime.now().date()
+                parquet_path = self.get_parquet_path(self.symbol, today)
+
                 if parquet_path.exists():
                     existing_df = pd.read_parquet(parquet_path)
-                    combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                    combined_df = pd.concat([existing_df, agg_df], ignore_index=True)
+                    # Remove any duplicates based on timestamp
+                    combined_df = combined_df.drop_duplicates(subset=['timestamp'], keep='last')
+                    # Sort by timestamp
+                    combined_df = combined_df.sort_values('timestamp')
                 else:
-                    combined_df = new_df
+                    combined_df = agg_df
 
                 combined_df.to_parquet(parquet_path, index=False)
-                print(f"\nSaved {len(buffer_data):,} new records to {parquet_path}")
+                save_time = datetime.now().strftime('%H:%M:%S')
+                print(f"\r[{save_time}] Saved aggregated data for {len(agg_df)} seconds", end='')
                 
             except Exception as e:
                 print(f"\nError saving to parquet: {e}")
@@ -115,6 +134,19 @@ class BinanceRealtimeFetcher:
         self.ws_thread = threading.Thread(target=self.ws.run_forever)
         self.ws_thread.daemon = True
         self.ws_thread.start()
+
+        # Start periodic save thread
+        self.save_thread = threading.Thread(target=self.periodic_save)
+        self.save_thread.daemon = True
+        self.save_thread.start()
+
+    def periodic_save(self):
+        while self.is_connected:
+            time.sleep(self.save_interval)
+            current_time = time.time()
+            if current_time - self.last_save_time >= self.save_interval:
+                self.save_to_parquet()
+                self.last_save_time = current_time
 
     def stop_streaming(self):
         if self.ws:

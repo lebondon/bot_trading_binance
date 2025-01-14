@@ -5,9 +5,6 @@ import time
 import plotly.graph_objects as go
 import numpy as np
 
-# Set up the Streamlit page (MUST BE THE FIRST COMMAND)
-st.set_page_config(page_title="Crypto Trading Simulator", layout="wide")
-
 # Function to get the current BTC/USDT price from Binance
 def get_current_price():
     url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
@@ -28,12 +25,12 @@ def moving_average(prices, period=10):
 
 # Function to calculate the RSI
 def relative_strength_index(prices, period=14):
-    if len(prices) < period:
+    if len(prices) < period + 1:  # Ensure enough data points for RSI calculation
         return None
     gains = 0
     losses = 0
-    for i in range(1, period+1):
-        change = prices[-i] - prices[-i-1]
+    for i in range(1, period + 1):
+        change = prices[-i] - prices[-i - 1]
         if change > 0:
             gains += change
         elif change < 0:
@@ -51,7 +48,7 @@ def relative_strength_index(prices, period=14):
 def bollinger_bands(prices, period=20, num_std=2):
     if len(prices) < period:
         return None, None, None
-    ma = moving_average(prices, period)
+    ma = np.convolve(prices, np.ones(period) / period, mode='valid')  # Moving average
     std = np.std(prices[-period:])
     upper_band = ma + (std * num_std)
     lower_band = ma - (std * num_std)
@@ -87,6 +84,12 @@ class TradingStrategy:
 
 # Moving Average Strategy
 class MovingAverageStrategy(TradingStrategy):
+    """
+    The Moving Average (MA) strategy uses a simple moving average to determine buy/sell signals.
+    - Buy Signal: When the current price crosses above the moving average.
+    - Sell Signal: When the current price crosses below the moving average.
+    This strategy works well in trending markets where prices move consistently in one direction.
+    """
     def should_buy(self, prices, current_balance, investment_amount):
         ma = moving_average(prices)
         current_price = prices[-1]
@@ -99,6 +102,12 @@ class MovingAverageStrategy(TradingStrategy):
 
 # RSI Strategy
 class RSIStrategy(TradingStrategy):
+    """
+    The Relative Strength Index (RSI) strategy uses the RSI indicator to identify overbought/oversold conditions.
+    - Buy Signal: When RSI is below 30 (oversold condition).
+    - Sell Signal: When RSI is above 70 (overbought condition).
+    This strategy works well in ranging markets where prices oscillate between overbought and oversold levels.
+    """
     def should_buy(self, prices, current_balance, investment_amount):
         rsi = relative_strength_index(prices)
         return rsi and rsi < 30 and current_balance >= investment_amount
@@ -109,6 +118,12 @@ class RSIStrategy(TradingStrategy):
 
 # Bollinger Bands Strategy
 class BollingerBandsStrategy(TradingStrategy):
+    """
+    The Bollinger Bands strategy uses volatility bands to identify buy/sell signals.
+    - Buy Signal: When the price touches or crosses the lower band (oversold condition).
+    - Sell Signal: When the price touches or crosses the upper band (overbought condition).
+    This strategy works well in volatile markets where prices frequently touch the bands.
+    """
     def should_buy(self, prices, current_balance, investment_amount):
         upper_band, _, lower_band = bollinger_bands(prices)
         current_price = prices[-1]
@@ -121,6 +136,12 @@ class BollingerBandsStrategy(TradingStrategy):
 
 # MACD Strategy
 class MACDStrategy(TradingStrategy):
+    """
+    The Moving Average Convergence Divergence (MACD) strategy uses the MACD line and signal line for buy/sell signals.
+    - Buy Signal: When the MACD line crosses above the signal line.
+    - Sell Signal: When the MACD line crosses below the signal line.
+    This strategy works well in trending markets where momentum shifts are significant.
+    """
     def should_buy(self, prices, current_balance, investment_amount):
         macd_line, signal_line = macd(prices)
         return macd_line and signal_line and macd_line > signal_line and current_balance >= investment_amount
@@ -131,6 +152,12 @@ class MACDStrategy(TradingStrategy):
 
 # Stochastic Oscillator Strategy
 class StochasticOscillatorStrategy(TradingStrategy):
+    """
+    The Stochastic Oscillator strategy uses the %K and %D lines to identify overbought/oversold conditions.
+    - Buy Signal: When %K crosses above %D and %K is below 20 (oversold condition).
+    - Sell Signal: When %K crosses below %D and %K is above 80 (overbought condition).
+    This strategy works well in ranging markets where prices oscillate between overbought and oversold levels.
+    """
     def should_buy(self, prices, current_balance, investment_amount):
         k, d = stochastic_oscillator(prices)
         return k and d and k > d and k < 20 and current_balance >= investment_amount
@@ -171,6 +198,7 @@ class TradingBot:
             'type': 'buy',
             'quantity': quantity,
             'price': price,
+            'entry_price': price,  # Store the entry price for future reference
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         })
         
@@ -181,13 +209,14 @@ class TradingBot:
         """Execute a sale."""
         sale_amount = self.current_position * price
         self.current_balance += sale_amount
-        self.current_position = 0
         self.transactions.append({
             'type': 'sell',
-            'quantity': self.current_position,
+            'quantity': self.current_position,  # Record the quantity before resetting
             'price': price,
+            'entry_price': self.entry_price,  # Include the entry price for profit calculation
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         })
+        self.current_position = 0  # Reset the position after recording the transaction
         st.success(f"Sale made! BTC balance: {self.current_position:.6f} | USD balance: {self.current_balance:.2f}")
 
     def get_portfolio(self):
@@ -199,58 +228,80 @@ class TradingBot:
 
 # Streamlit App
 def main():
-    # Title and description
+    # Set up the Streamlit page
+    st.set_page_config(page_title="Crypto Trading Simulator", layout="wide")
     st.title("🚀 Crypto Trading Simulator")
     st.markdown("""
         This app simulates a cryptocurrency trading strategy using real-time Bitcoin (BTC) price data.
         Choose a strategy, set your investment amount, and see how your portfolio performs!
     """)
 
-    # Sidebar for user inputs (created only once)
+    # Sidebar for user inputs
     with st.sidebar:
         st.header("Settings")
-        if 'initial_balance' not in st.session_state:
-            st.session_state.initial_balance = st.number_input(
-                "Initial Balance (USD)", 
-                min_value=100.0, 
-                value=1000.0, 
-                step=100.0, 
-                key="initial_balance_input"  # Unique key
-            )
-        if 'investment_amount' not in st.session_state:
-            st.session_state.investment_amount = st.number_input(
-                "Investment Amount per Trade (USD)", 
-                min_value=10.0, 
-                value=100.0, 
-                step=10.0, 
-                key="investment_amount_input"  # Unique key
-            )
-        if 'strategy_choice' not in st.session_state:
-            st.session_state.strategy_choice = st.selectbox(
-                "Trading Strategy", 
-                [
-                    "Moving Average (MA)", 
-                    "Relative Strength Index (RSI)", 
-                    "Bollinger Bands", 
-                    "MACD", 
-                    "Stochastic Oscillator"
-                ],
-                key="strategy_choice_selectbox"  # Unique key
-            )
-            if st.session_state.strategy_choice == "Moving Average (MA)":
-                st.session_state.strategy = MovingAverageStrategy()
-            elif st.session_state.strategy_choice == "Relative Strength Index (RSI)":
-                st.session_state.strategy = RSIStrategy()
-            elif st.session_state.strategy_choice == "Bollinger Bands":
-                st.session_state.strategy = BollingerBandsStrategy()
-            elif st.session_state.strategy_choice == "MACD":
-                st.session_state.strategy = MACDStrategy()
-            elif st.session_state.strategy_choice == "Stochastic Oscillator":
-                st.session_state.strategy = StochasticOscillatorStrategy()
+        initial_balance = 100000  # Set initial balance to 100,000
+        investment_percentage = st.slider("Investment Percentage per Trade (%)", min_value=1, max_value=100, value=10, step=1)
+        investment_amount = (investment_percentage / 100) * initial_balance  # Dynamic investment amount
+        strategy_choice = st.selectbox("Trading Strategy", [
+            "Moving Average (MA)", 
+            "Relative Strength Index (RSI)", 
+            "Bollinger Bands", 
+            "MACD", 
+            "Stochastic Oscillator"
+        ])
+        
+        # Display strategy description based on user selection
+        if strategy_choice == "Moving Average (MA)":
+            strategy = MovingAverageStrategy()
+            st.markdown("""
+                **Moving Average (MA) Strategy:**
+                - **Buy Signal:** When the current price crosses above the moving average.
+                - **Sell Signal:** When the current price crosses below the moving average.
+                - **Works Well In:** Trending markets where prices move consistently in one direction.
+            """)
+        elif strategy_choice == "Relative Strength Index (RSI)":
+            strategy = RSIStrategy()
+            st.markdown("""
+                **Relative Strength Index (RSI) Strategy:**
+                - **Buy Signal:** When RSI is below 30 (oversold condition).
+                - **Sell Signal:** When RSI is above 70 (overbought condition).
+                - **Works Well In:** Ranging markets where prices oscillate between overbought and oversold levels.
+            """)
+        elif strategy_choice == "Bollinger Bands":
+            strategy = BollingerBandsStrategy()
+            st.markdown("""
+                **Bollinger Bands Strategy:**
+                - **Buy Signal:** When the price touches or crosses the lower band (oversold condition).
+                - **Sell Signal:** When the price touches or crosses the upper band (overbought condition).
+                - **Works Well In:** Volatile markets where prices frequently touch the bands.
+            """)
+        elif strategy_choice == "MACD":
+            strategy = MACDStrategy()
+            st.markdown("""
+                **MACD Strategy:**
+                - **Buy Signal:** When the MACD line crosses above the signal line.
+                - **Sell Signal:** When the MACD line crosses below the signal line.
+                - **Works Well In:** Trending markets where momentum shifts are significant.
+            """)
+        elif strategy_choice == "Stochastic Oscillator":
+            strategy = StochasticOscillatorStrategy()
+            st.markdown("""
+                **Stochastic Oscillator Strategy:**
+                - **Buy Signal:** When %K crosses above %D and %K is below 20 (oversold condition).
+                - **Sell Signal:** When %K crosses below %D and %K is above 80 (overbought condition).
+                - **Works Well In:** Ranging markets where prices oscillate between overbought and oversold levels.
+            """)
 
-    # Initialize the trading bot and session state
+        # Add a Reset button
+        if st.button("Reset Simulation"):
+            st.session_state.bot = TradingBot(initial_balance, strategy)
+            st.session_state.prices = []
+            st.session_state.timestamps = []
+            st.success("Simulation reset successfully!")
+
+    # Initialize the trading bot
     if 'bot' not in st.session_state:
-        st.session_state.bot = TradingBot(st.session_state.initial_balance, st.session_state.strategy)
+        st.session_state.bot = TradingBot(initial_balance, strategy)
         st.session_state.prices = []
         st.session_state.timestamps = []
 
@@ -258,46 +309,109 @@ def main():
     st.subheader("📊 Portfolio Overview")
     col1, col2, col3 = st.columns(3)
     with col1:
-        btc_balance = st.empty()
+        st.metric("Current BTC Balance", f"{st.session_state.bot.current_position:.6f} BTC")
     with col2:
-        usd_balance = st.empty()
+        st.metric("Current USD Balance", f"${st.session_state.bot.current_balance:.2f}")
     with col3:
-        portfolio_value = st.empty()
+        portfolio_value = st.session_state.bot.get_portfolio()
+        st.metric("Total Portfolio Value", f"${portfolio_value:.2f}")
+
+    # Display Key Metrics and Performance Metrics in two columns
+    st.subheader("📈 Metrics")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Key Metrics
+        st.markdown("### Key Metrics")
+        if len(st.session_state.prices) > 14:  # Ensure enough data for RSI calculation
+            ma = moving_average(st.session_state.prices)
+            rsi = relative_strength_index(st.session_state.prices)
+
+            # Moving Average
+            if ma:
+                ma_color = "green" if st.session_state.prices[-1] > ma else "red"
+                st.markdown(f"**Moving Average (10-period):** <span style='color:{ma_color};'>{ma:.2f}</span>", unsafe_allow_html=True)
+
+            # RSI
+            if rsi:
+                rsi_color = "green" if rsi < 30 else "red" if rsi > 70 else "gray"
+                st.markdown(f"**RSI (14-period):** <span style='color:{rsi_color};'>{rsi:.2f}</span>", unsafe_allow_html=True)
+                if rsi < 30:
+                    st.markdown("**Market Condition:** <span style='color:green;'>Oversold</span>", unsafe_allow_html=True)
+                elif rsi > 70:
+                    st.markdown("**Market Condition:** <span style='color:red;'>Overbought</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown("**Market Condition:** <span style='color:gray;'>Neutral</span>", unsafe_allow_html=True)
+
+    with col2:
+        # Performance Metrics
+        st.markdown("### Performance Metrics")
+        if st.session_state.bot.transactions:
+            total_profit = st.session_state.bot.get_portfolio() - initial_balance
+            profitable_trades = sum(1 for t in st.session_state.bot.transactions if t['type'] == 'sell' and t['price'] > t['entry_price'])
+            total_trades = sum(1 for t in st.session_state.bot.transactions if t['type'] == 'sell')
+            win_rate = (profitable_trades / total_trades * 100) if total_trades > 0 else 0
+            st.metric("Total Profit/Loss", f"${total_profit:.2f}", delta_color="off")
+            st.metric("Win Rate", f"{win_rate:.2f}%")
+        else:
+            st.info("No performance data available yet.")
 
     # Display the price chart
     st.subheader("📈 BTC Price Over Time")
     chart_placeholder = st.empty()
 
-    # Fetch the current price and update the app
-    current_price = get_current_price()
-    if current_price is not None:
-        st.session_state.prices.append(current_price)
-        st.session_state.timestamps.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    # Placeholder for transaction history
+    transaction_history_placeholder = st.empty()
 
-        # Update the portfolio metrics
-        btc_balance.metric("Current BTC Balance", f"{st.session_state.bot.current_position:.6f} BTC")
-        usd_balance.metric("Current USD Balance", f"${st.session_state.bot.current_balance:.2f}")
-        total_value = st.session_state.bot.get_portfolio()
-        portfolio_value.metric("Total Portfolio Value", f"${total_value:.2f}")
+    # Simulate trades and update the chart
+    while True:
+        # Fetch the current price
+        current_price = get_current_price()
+        if current_price is not None:
+            st.session_state.prices.append(current_price)
+            st.session_state.timestamps.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-        # Clear the previous graph and plot the new one
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=st.session_state.timestamps, y=st.session_state.prices, mode='lines', name='BTC Price'))
-        fig.update_layout(
-            title="BTC Price Trend Over Time",
-            xaxis_title="Time",
-            yaxis_title="Price in USD",
-            template="plotly_dark"
-        )
-        chart_placeholder.plotly_chart(fig, use_container_width=True)
+            # Update the bot's price history
+            st.session_state.bot.price_history = st.session_state.prices
 
-        # Simulate a trade
-        st.session_state.bot.simulate_trade(st.session_state.investment_amount)
+            # Calculate Bollinger Bands for the entire price history
+            if len(st.session_state.prices) >= 20:  # Ensure enough data for Bollinger Bands
+                upper_band, ma, lower_band = bollinger_bands(st.session_state.prices)
+            else:
+                upper_band, ma, lower_band = None, None, None
 
-    # Use time.sleep to avoid blocking the app
-    time.sleep(1)
+            # Update the chart
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=st.session_state.timestamps, y=st.session_state.prices, mode='lines', name='BTC Price'))
+            
+            # Add Bollinger Bands to the chart
+            if upper_band is not None and ma is not None and lower_band is not None:
+                fig.add_trace(go.Scatter(x=st.session_state.timestamps[-len(upper_band):], y=upper_band, mode='lines', name='Upper Band'))
+                fig.add_trace(go.Scatter(x=st.session_state.timestamps[-len(ma):], y=ma, mode='lines', name='Moving Average'))
+                fig.add_trace(go.Scatter(x=st.session_state.timestamps[-len(lower_band):], y=lower_band, mode='lines', name='Lower Band'))
+            
+            fig.update_layout(
+                title="BTC Price Trend Over Time",
+                xaxis_title="Time",
+                yaxis_title="Price in USD",
+                template="plotly_dark"
+            )
+            chart_placeholder.plotly_chart(fig, use_container_width=True)
+
+            # Update transaction history
+            with transaction_history_placeholder.container():
+                st.subheader("📜 Transaction History")
+                if st.session_state.bot.transactions:
+                    st.table(st.session_state.bot.transactions)
+                else:
+                    st.info("No transactions yet.")
+
+            # Simulate a trade
+            st.session_state.bot.simulate_trade(investment_amount)
+
+        # Wait for 1 second before the next update
+        time.sleep(1)
 
 # Run the Streamlit app
 if __name__ == "__main__":
-    while True:
-        main()
+    main()

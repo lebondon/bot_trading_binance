@@ -28,13 +28,36 @@ def main():
     # Display the dataframe
     st.dataframe(results)
     
-    # Brief explanation
+    # Metric explanations
     st.write("""
     ### Metric Explanations
+
+    
     - **Return (%)**: Total percentage return of the strategy
-    - **Win Rate (%)**: Percentage of profitable trades
+        - Calculation: ((Final Capital - Initial Capital) / Initial Capital) * 100
+        - Measures the overall profitability of the strategy
+        - For example, a 34.04% return means \$100,000 would grow to \$134,040
+
+    ---
+
+    - **Win Rate (%)**: Percentage of trades that resulted in a profit
+        - Calculation: (Number of Profitable Trades / Total Trades) * 100
+        - Shows how often the strategy makes winning trades
+        - A win rate above 50% indicates more winning trades than losing trades
+
+    ---
+
     - **Total Trades**: Number of completed trades
-    - **Max Drawdown (%)**: Largest peak-to-trough decline
+        - Counts each completed buy and sell pair as one trade
+        - Higher numbers indicate more active trading
+        - Helps evaluate strategy frequency and transaction costs
+
+    ---
+
+    - **Max Drawdown (%)**: Largest peak-to-trough decline in portfolio value
+        - Calculation: ((Peak Value - Lowest Value) / Peak Value) * 100
+        - Measures the biggest historical loss from a peak
+        - Important for understanding worst-case risk scenarios
     """)
 
 if __name__ == "__main__":
